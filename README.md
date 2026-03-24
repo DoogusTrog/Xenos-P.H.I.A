@@ -6,4 +6,4 @@ psutil,
 pyautogui,
 pywin32,
 and Pillow.
-Compile and run the launcher.
+After installing dependencies, pull LLaMa3.2 Vision using ollama. (ollama pull llama3.2-vision)
