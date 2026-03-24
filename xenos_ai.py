@@ -16,8 +16,6 @@ system processes. (Mostly.)
 -------------------------------------------------------------------------------------------------------------------------
 """
 
-
-
 import tkinter as tk
 from tkinter import ttk
 import threading
@@ -30,6 +28,12 @@ import time
 import win32gui
 import win32con
 import win32process
+
+# ─── Config ────────────────────────────────────────────────
+VISION_MODEL = "llama3.2-vision"
+MAX_HISTORY  = 10
+MAX_PREDICT  = 1024
+CTX_SIZE     = 4096
 
 # ─── RAM Storage ───────────────────────────────────────────
 current_screenshot = None
@@ -98,21 +102,26 @@ def focus_and_screenshot(pid):
             buffer.close()
 
             set_status(f"Screenshot captured from {monitored_app['name']} ✅")
+        except Exception as e:
+            set_status(f"Screenshot error: {str(e)}")
         finally:
             win32gui.ShowWindow(hwnd, placement[1])
             win32gui.SetWindowPlacement(hwnd, placement)
     else:
         set_status("Window not found, falling back to full screen capture...")
-        screenshot = pyautogui.screenshot()
-        buffer = io.BytesIO()
-        screenshot.save(buffer, format="PNG")
-        current_screenshot = buffer.getvalue()
-        buffer.close()
-        set_status("Fallback screenshot captured ✅")
+        try:
+            screenshot = pyautogui.screenshot()
+            buffer = io.BytesIO()
+            screenshot.save(buffer, format="PNG")
+            current_screenshot = buffer.getvalue()
+            buffer.close()
+            set_status("Fallback screenshot captured ✅")
+        except Exception as e:
+            set_status(f"Fallback screenshot error: {str(e)}")
 
 # ─── Overlay Window ────────────────────────────────────────
 overlay = None
-overlay_txt = None  # global ref so we can write to it from anywhere
+overlay_txt = None
 
 def show_overlay(text):
     global overlay, overlay_txt
@@ -138,7 +147,6 @@ def show_overlay(text):
              bg="#1a1a1a", fg="#00ff99",
              font=("Consolas", 10, "bold")).pack(side=tk.LEFT, padx=10)
 
-    # screenshot status indicator
     shot_label = tk.Label(drag_bar, text="● LIVE",
                           bg="#1a1a1a", fg="#00ff99",
                           font=("Consolas", 8))
@@ -149,7 +157,6 @@ def show_overlay(text):
               activeforeground="#ff0000",
               command=overlay.destroy).pack(side=tk.RIGHT, padx=5)
 
-    # new screenshot button in drag bar
     tk.Button(drag_bar, text="⟳ New Shot", bg="#1a1a1a", fg="#00ff99",
               bd=0, font=("Consolas", 8), activebackground="#1a1a1a",
               activeforeground="#00cc77",
@@ -200,7 +207,6 @@ def show_overlay(text):
         overlay_txt.see(tk.END)
 
         def run():
-            # reuse existing screenshot unless new one was requested
             if current_screenshot is None:
                 focus_and_screenshot(monitored_app['pid'])
                 root.after(0, lambda: shot_label.config(text="● LIVE"))
@@ -260,44 +266,52 @@ def get_running_apps():
 def ask_llama(question):
     global current_screenshot, conversation_history
 
-    b64 = base64.b64encode(current_screenshot).decode("utf-8")
+    try:
+        b64 = base64.b64encode(current_screenshot).decode("utf-8")
 
-    # build message with image attached to current question
-    conversation_history.append({
-        "role": "user",
-        "content": question,
-        "images": [b64]
-    })
+        conversation_history.append({
+            "role": "user",
+            "content": question,
+            "images": [b64]
+        })
 
-    # keep history to last 10 exchanges so context doesnt balloon
-    trimmed = conversation_history[-10:]
+        trimmed = conversation_history[-MAX_HISTORY:]
 
-    response = ollama.chat(
-        model="llama3.2-vision",
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a sharp, concise AI assistant with vision. "
-                    "You are analyzing screenshots of the user's active application. "
-                    "Answer any question you are asked confidently, but admit when incapable."
-                    "Answer questions about what you see clearly and directly. "
-                    "Remember what was said earlier in this conversation. "
-                    "Do not repeat yourself. Do not be verbose. However, Do NOT leave out details that are relevant to the user's question. "
-                )
+        response = ollama.chat(
+            model=VISION_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a sharp, concise AI assistant with vision. "
+                        "You are analyzing screenshots of the user's active application. "
+                        "Answer any question you are asked confidently, but admit when incapable. "
+                        "Answer questions about what you see clearly and directly. "
+                        "Remember what was said earlier in this conversation. Do NOT repeat yourself. Look over your past words. "
+                        "Do not repeat yourself. Do not be verbose. Your name is Xenos. "
+                        "However, do NOT leave out details that are relevant to the user's question."
+                    )
+                }
+            ] + trimmed,
+            options={
+                "num_predict": MAX_PREDICT,
+                "num_ctx": CTX_SIZE,
             }
-        ] + trimmed
-    )
+        )
 
-    reply = response["message"]["content"]
+        reply = response["message"]["content"]
 
-    # store assistant reply in history
-    conversation_history.append({
-        "role": "assistant",
-        "content": reply
-    })
+        conversation_history.append({
+            "role": "assistant",
+            "content": reply
+        })
 
-    return reply
+        return reply
+
+    except Exception as e:
+        error_msg = str(e)
+        root.after(0, lambda: set_status(f"❌ Error: {error_msg}"))
+        return f"Something went wrong: {error_msg}"
 
 # ─── System Stats ──────────────────────────────────────────
 def get_ram_usage():
@@ -347,7 +361,7 @@ def hook_into_app():
         set_status("No app selected.")
         return
     monitored_app = apps[selected[0]]
-    conversation_history = []  # fresh context on new hook
+    conversation_history = []
     set_status(f"Monitoring: {monitored_app['name']} (PID: {monitored_app['pid']})")
     append_chat("System", f"Hooked into {monitored_app['name']}")
 
@@ -373,7 +387,6 @@ def on_send():
     set_status("Taking screenshot...")
 
     def run():
-        # only take new screenshot if we dont have one cached
         if current_screenshot is None:
             focus_and_screenshot(monitored_app['pid'])
         else:
@@ -383,7 +396,7 @@ def on_send():
         answer = ask_llama(question)
         append_chat("AI", answer)
         root.after(0, lambda: show_overlay(answer))
-        set_status("Ready.")
+        root.after(0, lambda: set_status("Ready."))
 
     threading.Thread(target=run, daemon=True).start()
 
