@@ -6,3 +6,4 @@ psutil,
 pyautogui,
 pywin32,
 and Pillow.
+Compile and run the launcher.
