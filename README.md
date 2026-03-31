@@ -7,3 +7,4 @@ pyautogui,
 pywin32,
 and Pillow.
 After installing dependencies, pull LLaMa3.2 Vision using ollama. (ollama pull llama3.2-vision)
+NOTE: There are currently prompting issues I have not updated and will not until I make the tool more token efficient.
