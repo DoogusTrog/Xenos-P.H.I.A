@@ -1,0 +1,1 @@
+Xenos is a local intelligent assistant based off of LLaMa 3.2V. It can use audio, visual, and text interpretation thanks to many python modules. It is a GUI wrapper with extra features compared to simply prompting the model, and it even stores information in a local JSON cache.
